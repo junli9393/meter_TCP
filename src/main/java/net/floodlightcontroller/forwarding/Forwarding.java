@@ -27,6 +27,8 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.EnumSet;
+
 
 import net.floodlightcontroller.core.FloodlightContext;
 import net.floodlightcontroller.core.IFloodlightProviderService;
@@ -63,7 +65,10 @@ import net.floodlightcontroller.util.OFMessageUtils;
 import net.floodlightcontroller.util.OFPortMode;
 import net.floodlightcontroller.util.OFPortModeTuple;
 import net.floodlightcontroller.util.ParseUtils;
+import net.floodlightcontroller.util.MatchUtils;
 
+import org.projectfloodlight.openflow.protocol.OFFactories;
+import org.projectfloodlight.openflow.protocol.OFFactory;
 import org.projectfloodlight.openflow.protocol.OFFlowMod;
 import org.projectfloodlight.openflow.protocol.OFFlowModCommand;
 import org.projectfloodlight.openflow.protocol.OFGroupType;
@@ -73,6 +78,7 @@ import org.projectfloodlight.openflow.protocol.OFPacketOut;
 import org.projectfloodlight.openflow.protocol.OFPortDesc;
 import org.projectfloodlight.openflow.protocol.OFVersion;
 import org.projectfloodlight.openflow.protocol.action.OFAction;
+import org.projectfloodlight.openflow.protocol.action.OFActionOutput;
 import org.projectfloodlight.openflow.protocol.match.Match;
 import org.projectfloodlight.openflow.protocol.match.MatchField;
 import org.projectfloodlight.openflow.types.DatapathId;
@@ -94,6 +100,21 @@ import org.python.google.common.collect.ImmutableList;
 import org.python.google.common.collect.Maps;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import net.floodlightcontroller.util.MatchUtils;
+import org.projectfloodlight.openflow.protocol.instruction.OFInstruction;
+import org.projectfloodlight.openflow.protocol.instruction.OFInstructionApplyActions;
+import org.projectfloodlight.openflow.protocol.instruction.OFInstructionMeter;
+import org.projectfloodlight.openflow.protocol.instruction.OFInstructions;
+import org.projectfloodlight.openflow.protocol.OFFlowAdd;
+import org.projectfloodlight.openflow.protocol.OFFlowAdd.Builder;
+
+import org.projectfloodlight.openflow.protocol.meterband.OFMeterBand;
+import org.projectfloodlight.openflow.protocol.meterband.OFMeterBandDrop;
+import org.projectfloodlight.openflow.protocol.OFMeterFlags;
+import org.projectfloodlight.openflow.protocol.OFMeterMod;
+import org.projectfloodlight.openflow.protocol.OFMeterModCommand;
+
 
 public class Forwarding extends ForwardingBase implements IFloodlightModule, IOFSwitchListener, ILinkDiscoveryListener, IRoutingDecisionChangedListener {
     protected static final Logger log = LoggerFactory.getLogger(Forwarding.class);
@@ -129,6 +150,7 @@ public class Forwarding extends ForwardingBase implements IFloodlightModule, IOF
     private static final long FLOWSET_MASK = ((1L << FLOWSET_BITS) - 1) << FLOWSET_SHIFT;
     private static final long FLOWSET_MAX = (long) (Math.pow(2, FLOWSET_BITS) - 1);
     protected static FlowSetIdRegistry flowSetIdRegistry;
+    protected static int meterid = 1;
 
     protected static class FlowSetIdRegistry {
         private volatile Map<NodePortTuple, Set<U64>> nptToFlowSetIds;
@@ -460,7 +482,7 @@ public class Forwarding extends ForwardingBase implements IFloodlightModule, IOF
                 dstAp = ap;
                 break;
             }
-        }	
+        }   
 
         /* 
          * This should only happen (perhaps) when the controller is
@@ -479,7 +501,7 @@ public class Forwarding extends ForwardingBase implements IFloodlightModule, IOF
         if (sw.getId().equals(dstAp.getNodeId()) && srcPort.equals(dstAp.getPortId())) {
             log.info("Both source and destination are on the same switch/port {}/{}. Dropping packet", sw.toString(), srcPort);
             return;
-        }			
+        }           
 
         U64 flowSetId = flowSetIdRegistry.generateFlowSetId();
         U64 cookie = makeForwardingCookie(decision, flowSetId);
@@ -500,9 +522,64 @@ public class Forwarding extends ForwardingBase implements IFloodlightModule, IOF
                 log.debug("Creating flow rules on the route, match rule: {}", m);
             }
 
+
+            /*Build Meter*/
+            OFFactory meterFactory = OFFactories.getFactory(OFVersion.OF_13);
+            OFMeterMod.Builder meterModBuilder = meterFactory.buildMeterMod()
+                .setMeterId(meterid).setCommand(OFMeterModCommand.ADD);
+
+            int rate  = 20000; 
+            OFMeterBandDrop.Builder bandBuilder = meterFactory.meterBands().buildDrop()
+                .setRate(rate);
+            OFMeterBand band = bandBuilder.build();
+            List<OFMeterBand> bands = new ArrayList<OFMeterBand>();
+            bands.add(band);
+  
+            Set<OFMeterFlags> flags2 = new HashSet<>();
+            flags2.add(OFMeterFlags.KBPS);
+            meterModBuilder.setMeters(bands)
+                .setFlags(flags2).build();
+
+            sw.write(meterModBuilder.build());
+
+
+            /*Bind flow with meter*/
+            // Ethernet eth = IFloodlightProviderService.bcStore.get(cntx, IFloodlightProviderService.CONTEXT_PI_PAYLOAD);
+            // MacAddress srcMac = eth.getSourceMACAddress();
+
+            Match.Builder mb2 = sw.getOFFactory().buildMatch();
+            mb2.setExact(MatchField.IN_PORT, OFPort.of(1));
+
+            OFFactory my13Factory = OFFactories.getFactory(OFVersion.OF_13);
+            ArrayList<OFInstruction> instructions = new ArrayList<OFInstruction>();
+            ArrayList<OFAction> actionList = new ArrayList<OFAction>();
+            OFInstructionMeter meter = my13Factory.instructions().buildMeter()
+                .setMeterId(meterid)
+                .build();
+            OFActionOutput output = my13Factory.actions().buildOutput()
+                .setPort(OFPort.of(2))
+                .build();
+
+            actionList.add(output);
+            OFInstructionApplyActions applyActions = my13Factory.instructions().buildApplyActions()
+                .setActions(actionList)
+                .build();
+            instructions.add(applyActions);
+            instructions.add(meter);
+            meterid++;
+
+            /*Meter part ends*/
+
+            OFFlowAdd flowAdd = my13Factory.buildFlowAdd()
+                .setMatch(mb2.build())
+                .setInstructions(instructions)
+                .setPriority(32768)
+                .build();
+            sw.write(flowAdd);
+
             pushRoute(path, m, pi, sw.getId(), cookie, 
                     cntx, requestFlowRemovedNotifn,
-                    OFFlowModCommand.ADD);	
+                    OFFlowModCommand.ADD);  
             
             /* 
              * Register this flowset with ingress and egress ports for link down
@@ -602,9 +679,9 @@ public class Forwarding extends ForwardingBase implements IFloodlightModule, IOF
                     Integer.parseInt(sw.getSwitchDescription().getSoftwareDescription().toLowerCase().split("\\.")[0]) == 2 &&
                     Integer.parseInt(sw.getSwitchDescription().getSoftwareDescription().toLowerCase().split("\\.")[1]) >= 1 ))
                     ){
-	                    if(FLOWMOD_DEFAULT_MATCH_TCP_FLAG){
-	                        mb.setExact(MatchField.OVS_TCP_FLAGS, U16.of(tcp.getFlags()));
-	                    }
+                        if(FLOWMOD_DEFAULT_MATCH_TCP_FLAG){
+                            mb.setExact(MatchField.OVS_TCP_FLAGS, U16.of(tcp.getFlags()));
+                        }
                     }
                 } else if (ip.getProtocol().equals(IpProtocol.UDP)) {
                     UDP udp = (UDP) ip.getPayload();
@@ -658,9 +735,9 @@ public class Forwarding extends ForwardingBase implements IFloodlightModule, IOF
                     Integer.parseInt(sw.getSwitchDescription().getSoftwareDescription().toLowerCase().split("\\.")[0]) == 2 &&
                     Integer.parseInt(sw.getSwitchDescription().getSoftwareDescription().toLowerCase().split("\\.")[1]) >= 1 ))
                     ){
-	                    if(FLOWMOD_DEFAULT_MATCH_TCP_FLAG){
-	                        mb.setExact(MatchField.OVS_TCP_FLAGS, U16.of(tcp.getFlags()));
-	                    }
+                        if(FLOWMOD_DEFAULT_MATCH_TCP_FLAG){
+                            mb.setExact(MatchField.OVS_TCP_FLAGS, U16.of(tcp.getFlags()));
+                        }
                     }
                 } else if (ip.getNextHeader().equals(IpProtocol.UDP)) {
                     UDP udp = (UDP) ip.getPayload();
@@ -806,14 +883,14 @@ public class Forwarding extends ForwardingBase implements IFloodlightModule, IOF
                 FLOWMOD_DEFAULT_MATCH_MAC = tmp.contains("mac") ? true : false;
                 FLOWMOD_DEFAULT_MATCH_IP = tmp.contains("ip") ? true : false;
                 FLOWMOD_DEFAULT_MATCH_TRANSPORT = tmp.contains("transport") ? true : false;
-				FLOWMOD_DEFAULT_MATCH_TCP_FLAG = tmp.contains("flag") ? true : false;
+                FLOWMOD_DEFAULT_MATCH_TCP_FLAG = tmp.contains("flag") ? true : false;
             }
         }
         log.info("Default flow matches set to: IN_PORT=" + FLOWMOD_DEFAULT_MATCH_IN_PORT
                 + ", VLAN=" + FLOWMOD_DEFAULT_MATCH_VLAN
                 + ", MAC=" + FLOWMOD_DEFAULT_MATCH_MAC
                 + ", IP=" + FLOWMOD_DEFAULT_MATCH_IP
-				+ ", FLAG=" + FLOWMOD_DEFAULT_MATCH_TCP_FLAG
+                + ", FLAG=" + FLOWMOD_DEFAULT_MATCH_TCP_FLAG
                 + ", TPPT=" + FLOWMOD_DEFAULT_MATCH_TRANSPORT);
 
         tmp = configParameters.get("detailed-match");
@@ -879,7 +956,7 @@ public class Forwarding extends ForwardingBase implements IFloodlightModule, IOF
     }
 
     @Override
-    public void switchRemoved(DatapathId switchId) {		
+    public void switchRemoved(DatapathId switchId) {        
     }
 
     @Override
@@ -918,7 +995,7 @@ public class Forwarding extends ForwardingBase implements IFloodlightModule, IOF
     }
 
     @Override
-    public void switchPortChanged(DatapathId switchId, OFPortDesc port, PortChangeType type) {	
+    public void switchPortChanged(DatapathId switchId, OFPortDesc port, PortChangeType type) {  
         /* Port down events handled via linkDiscoveryUpdate(), which passes thru all events */
     }
 
