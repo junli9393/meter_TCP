@@ -512,14 +512,16 @@ public class Forwarding extends ForwardingBase implements IFloodlightModule, IOF
 
         Match m = createMatchFromPacket(sw, srcPort, pi, cntx);
 
-        if (! path.getPath().isEmpty()) {
-            if (log.isDebugEnabled()) {
-                log.debug("pushRoute inPort={} route={} " +
+        // ! path.getPath().isEmpty()
+        if (true) {
+            //log.isInfoEnabled()
+            if (true) {
+                log.info("pushRoute inPort={} route={} " +
                         "destination={}:{}",
                         new Object[] { srcPort, path,
                                 dstAp.getNodeId(),
                                 dstAp.getPortId()});
-                log.debug("Creating flow rules on the route, match rule: {}", m);
+                log.info("Creating flow rules on the route, match rule: {}", m);
             }
 
 
@@ -528,7 +530,7 @@ public class Forwarding extends ForwardingBase implements IFloodlightModule, IOF
             OFMeterMod.Builder meterModBuilder = meterFactory.buildMeterMod()
                 .setMeterId(meterid).setCommand(OFMeterModCommand.ADD);
 
-            int rate  = 20000; 
+            int rate  = 80000; 
             OFMeterBandDrop.Builder bandBuilder = meterFactory.meterBands().buildDrop()
                 .setRate(rate);
             OFMeterBand band = bandBuilder.build();
@@ -548,7 +550,7 @@ public class Forwarding extends ForwardingBase implements IFloodlightModule, IOF
             // MacAddress srcMac = eth.getSourceMACAddress();
 
             Match.Builder mb2 = sw.getOFFactory().buildMatch();
-            mb2.setExact(MatchField.IN_PORT, OFPort.of(1));
+            mb2.setExact(MatchField.IN_PORT, srcPort);
 
             OFFactory my13Factory = OFFactories.getFactory(OFVersion.OF_13);
             ArrayList<OFInstruction> instructions = new ArrayList<OFInstruction>();
@@ -557,7 +559,7 @@ public class Forwarding extends ForwardingBase implements IFloodlightModule, IOF
                 .setMeterId(meterid)
                 .build();
             OFActionOutput output = my13Factory.actions().buildOutput()
-                .setPort(OFPort.of(2))
+                .setPort(path.getPath().get(1).getPortId())
                 .build();
 
             actionList.add(output);
