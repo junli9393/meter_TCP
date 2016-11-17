@@ -115,6 +115,8 @@ import org.projectfloodlight.openflow.protocol.OFMeterFlags;
 import org.projectfloodlight.openflow.protocol.OFMeterMod;
 import org.projectfloodlight.openflow.protocol.OFMeterModCommand;
 
+import net.floodlightcontroller.dropmeter.DropMeter;
+
 
 public class Forwarding extends ForwardingBase implements IFloodlightModule, IOFSwitchListener, ILinkDiscoveryListener, IRoutingDecisionChangedListener {
     protected static final Logger log = LoggerFactory.getLogger(Forwarding.class);
@@ -524,60 +526,63 @@ public class Forwarding extends ForwardingBase implements IFloodlightModule, IOF
                 log.info("Creating flow rules on the route, match rule: {}", m);
             }
 
-
-            /*Build Meter*/
-            OFFactory meterFactory = OFFactories.getFactory(OFVersion.OF_13);
-            OFMeterMod.Builder meterModBuilder = meterFactory.buildMeterMod()
-                .setMeterId(meterid).setCommand(OFMeterModCommand.ADD);
-
-            int rate  = 80000; 
-            OFMeterBandDrop.Builder bandBuilder = meterFactory.meterBands().buildDrop()
-                .setRate(rate);
-            OFMeterBand band = bandBuilder.build();
-            List<OFMeterBand> bands = new ArrayList<OFMeterBand>();
-            bands.add(band);
-  
-            Set<OFMeterFlags> flags2 = new HashSet<>();
-            flags2.add(OFMeterFlags.KBPS);
-            meterModBuilder.setMeters(bands)
-                .setFlags(flags2).build();
-
-            sw.write(meterModBuilder.build());
-
-
-            /*Bind flow with meter*/
-            // Ethernet eth = IFloodlightProviderService.bcStore.get(cntx, IFloodlightProviderService.CONTEXT_PI_PAYLOAD);
-            // MacAddress srcMac = eth.getSourceMACAddress();
-
-            Match.Builder mb2 = sw.getOFFactory().buildMatch();
-            mb2.setExact(MatchField.IN_PORT, srcPort);
-
-            OFFactory my13Factory = OFFactories.getFactory(OFVersion.OF_13);
-            ArrayList<OFInstruction> instructions = new ArrayList<OFInstruction>();
-            ArrayList<OFAction> actionList = new ArrayList<OFAction>();
-            OFInstructionMeter meter = my13Factory.instructions().buildMeter()
-                .setMeterId(meterid)
-                .build();
-            OFActionOutput output = my13Factory.actions().buildOutput()
-                .setPort(path.getPath().get(1).getPortId())
-                .build();
-
-            actionList.add(output);
-            OFInstructionApplyActions applyActions = my13Factory.instructions().buildApplyActions()
-                .setActions(actionList)
-                .build();
-            instructions.add(applyActions);
-            instructions.add(meter);
-            meterid++;
-
-            /*Meter part ends*/
-
-            OFFlowAdd flowAdd = my13Factory.buildFlowAdd()
-                .setMatch(mb2.build())
-                .setInstructions(instructions)
-                .setPriority(32768)
-                .build();
-            sw.write(flowAdd);
+            
+            DropMeter dm = new DropMeter();
+            dm.createMeter(sw);
+            dm.bindMeterWithFlow(sw, srcPort, path);
+//            /*Build Meter*/
+//            OFFactory meterFactory = OFFactories.getFactory(OFVersion.OF_13);
+//            OFMeterMod.Builder meterModBuilder = meterFactory.buildMeterMod()
+//                .setMeterId(meterid).setCommand(OFMeterModCommand.ADD);
+//
+//            int rate  = 80000; 
+//            OFMeterBandDrop.Builder bandBuilder = meterFactory.meterBands().buildDrop()
+//                .setRate(rate);
+//            OFMeterBand band = bandBuilder.build();
+//            List<OFMeterBand> bands = new ArrayList<OFMeterBand>();
+//            bands.add(band);
+//  
+//            Set<OFMeterFlags> flags2 = new HashSet<>();
+//            flags2.add(OFMeterFlags.KBPS);
+//            meterModBuilder.setMeters(bands)
+//                .setFlags(flags2).build();
+//
+//            sw.write(meterModBuilder.build());
+//
+//
+//            /*Bind flow with meter*/
+//            // Ethernet eth = IFloodlightProviderService.bcStore.get(cntx, IFloodlightProviderService.CONTEXT_PI_PAYLOAD);
+//            // MacAddress srcMac = eth.getSourceMACAddress();
+//
+//            Match.Builder mb2 = sw.getOFFactory().buildMatch();
+//            mb2.setExact(MatchField.IN_PORT, srcPort);
+//
+//            OFFactory my13Factory = OFFactories.getFactory(OFVersion.OF_13);
+//            ArrayList<OFInstruction> instructions = new ArrayList<OFInstruction>();
+//            ArrayList<OFAction> actionList = new ArrayList<OFAction>();
+//            OFInstructionMeter meter = my13Factory.instructions().buildMeter()
+//                .setMeterId(meterid)
+//                .build();
+//            OFActionOutput output = my13Factory.actions().buildOutput()
+//                .setPort(path.getPath().get(1).getPortId())
+//                .build();
+//
+//            actionList.add(output);
+//            OFInstructionApplyActions applyActions = my13Factory.instructions().buildApplyActions()
+//                .setActions(actionList)
+//                .build();
+//            instructions.add(applyActions);
+//            instructions.add(meter);
+//            meterid++;
+//
+//            /*Meter part ends*/
+//
+//            OFFlowAdd flowAdd = my13Factory.buildFlowAdd()
+//                .setMatch(mb2.build())
+//                .setInstructions(instructions)
+//                .setPriority(32768)
+//                .build();
+//            sw.write(flowAdd);
 
             pushRoute(path, m, pi, sw.getId(), cookie, 
                     cntx, requestFlowRemovedNotifn,
